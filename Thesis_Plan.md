@@ -18,7 +18,7 @@ Titans has a recurrent neural memory state just like in TTT. It then integrates 
 
 ## Motivation
 
-LLMs still struggle with very long contexts because full attention is expensive and important information can be diluted or missed. Two common directions address this in different ways. External episodic memory banks store and retrieve past segments, while recurrent or hybrid models carry information forward in a compact recurrent state/fast weights. We aim to combine both by using a recurrent or linear-attention backbone together with an external episodic memory bank, and guiding memory formation and retrieval using the model’s hidden-state dynamics. In the end, we adopt the memory implementations from Titans to generate the final output.  
+LLMs still struggle with very long contexts because full attention is expensive and important information can be diluted or missed. Two common directions address this in different ways. External episodic memory banks store and retrieve past segments, while recurrent or hybrid models carry information forward in a compact recurrent state/fast weights. We aim to combine both by using a recurrent or linear-attention backbone together with an external episodic memory bank, and guiding memory formation and retrieval using the model’s hidden-state dynamics. In the end, we keep EM-LLM as the host runtime and adapt Titans/TTT memory components as an additional recurrent branch plus fusion module, rather than replacing the existing EM-LLM pipeline outright.  
 
 # Research Directions
 
@@ -111,7 +111,7 @@ A hybrid design that uses TTT-340M as the base model and adds a Titans-style att
 
 ### Titans-Inspired Memory Implementation in EM-LLM
 
-We apply attention over the persistent tokens $p_1,...,p_{N_p}$, the retrieved EM-LLM memory segments $s_1,...,s_k$, and local recent tokens $SW(x)$, then fuse this attention output with the TTT branch output. Since EM-LLM already retrieves past segments into the context window, we omit Titans’ explicit long-term retrieval $h_t$. As a result, the fixed-size segmentation used in the original Titans MAC formulation is unnecessary, and we the current segment $S^{(t)}$ with a sliding local window $SW(x)$. Overall, this gives us a hybrid design, we add the retrieval provided by EM-LLM as additional context (adaptation of MAC from Titans), while the fused final output with gating matches the Titans MAG implementation.
+We apply attention over the persistent tokens $p_1,...,p_{N_p}$, the retrieved EM-LLM memory segments $s_1,...,s_k$, and local recent tokens $SW(x)$, then fuse this attention output with the TTT branch output. Since EM-LLM already retrieves past segments into the context window, we omit Titans’ explicit long-term retrieval $h_t$. As a result, the fixed-size segmentation used in the original Titans MAC formulation is unnecessary, and we replace the current segment $S^{(t)}$ with a sliding local window $SW(x)$. Overall, this gives us a hybrid design: we add retrieval provided by EM-LLM as additional context (an adaptation of Titans MAC), while using Titans MAG-style gating for the fused final output.
 
 $$
 \tilde{x} = [p_1,...,p_{N_p}] \parallel [s_1,...,s_k] \parallel SW(x)
@@ -135,11 +135,11 @@ Implement the attention branch with PyTorch SDPA or flash-linear-attention for s
 
 ### Training
 
-In Titans, the training is joint. The attention and gating parameters are optimised in the outer-loop, while the TTT recurrent state/fast weights $W_t$ is updated online in the inner-loop. Preferably, the training script will not need modifications, and the existing MAG implementation joint training can be used as it is. 
+In Titans, training is joint: attention and gating parameters are optimised in the outer-loop, while the TTT recurrent state/fast weights $W_t$ are updated online in the inner-loop. For EM-LLM integration, we should not assume the existing MAG training stack can be reused unchanged; adapter work and runtime-specific training glue may be required after inference-path validation. 
 
 ### Adapting to EM-LLM
 
-Add separate forward pass patching logic to run TitansMAG-340M with TTT linear SDG as the base model (with attention on the additional retrieved tokens from the episodic memory segments). Use the recurrent state from TTT linear for potentially more precise memory segmentation and retrieval. Add `recurrent_state_based_segmentation` and `recurrent_state_based_retrieval` as additional configuration parameters for `titans_mag_linear_sgd_340M.yaml`.
+Add separate forward pass patching logic to run TitansMAG-340M with TTT linear SGD as the base model (with attention on the additional retrieved tokens from the episodic memory segments). Use the recurrent state from TTT linear for potentially more precise memory segmentation and retrieval. Add `recurrent_state_based_segmentation` and `recurrent_state_based_retrieval` as additional configuration parameters for `titans_mag_linear_sgd_340M.yaml`.
 
 ## Experiments
 

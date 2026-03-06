@@ -2,7 +2,7 @@
 
 ## Summary
 
-Write this plan into a new markdown file at `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/HYBRID_MEMORY_MAG_RUNTIME_PLAN.md`.
+Write this plan into a new markdown file at `EM-LLM-model/HYBRID_MEMORY_MAG_RUNTIME_PLAN.md` (repo-relative path).
 
 Implement a new runtime path that explicitly combines, in one patched attention forward:
 
@@ -22,7 +22,7 @@ Behavior in each patched attention layer:
 
 1. project the incoming hidden states exactly as the current EM-LLM path does
 2. run the existing EM-LLM retrieval branch through `ContextManager.append(...)` to produce the episodic retrieval-aware attention output
-3. run the vendored TTT recurrent branch on the same layer input hidden states, using the vendored `TTT` or vendored `LinearSGD` state path
+3. run the vendored TTT recurrent branch on the same layer input hidden states, using the vendored `LinearSGD` state path in phase 1 (treat full `TTT` module integration as a later extension)
 4. fuse the two branch outputs with MAG-style gating
 5. return the fused hidden states and a hybrid per-layer cache object
 
@@ -69,25 +69,25 @@ Do not let the recurrent branch bypass the fusion module.
 
 Use these implementation entrypoints:
 
-- `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/em_llm/attention/__init__.py`
+- `EM-LLM-model/em_llm/attention/__init__.py`
   Register `em-llm-ttt-mag` in both `ATTN_FORWARD` and `CAUSAL_LM_FORWARD`.
 
-- `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/em_llm/attention/em_llm_ttt_mag.py`
+- `EM-LLM-model/em_llm/attention/em_llm_ttt_mag.py`
   Add the hybrid patched attention forward and a causal LM forward that reuses the current EM-LLM loss/surprisal behavior.
 
-- `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/em_llm/attention/hybrid_state.py`
+- `EM-LLM-model/em_llm/attention/hybrid_state.py`
   Define `HybridLayerState`.
 
-- `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/em_llm/attention/mag_fusion.py`
+- `EM-LLM-model/em_llm/attention/mag_fusion.py`
   Define the MAG fusion module with baseline-safe initialization.
 
-- `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/em_llm/utils/patch_hf.py`
+- `EM-LLM-model/em_llm/utils/patch_hf.py`
   Reuse the same patched HF attention path, but route the new attention type to the hybrid forward factory.
 
-- `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/em_llm/utils/greedy_search.py`
+- `EM-LLM-model/em_llm/utils/greedy_search.py`
   Accept both `em-llm` and `em-llm-ttt-mag`. Preserve current chunked ingestion and decode behavior.
 
-- `/Users/jameschen/PycharmProjects/BachelorThesis/EM-LLM-model/benchmark/pred.py`
+- `EM-LLM-model/benchmark/pred.py`
   Allow the new `model.type` to load through the same benchmark path.
 
 Do not modify the donor repository under `sparse-linear-attention/`.
@@ -142,5 +142,6 @@ A correct implementation should satisfy all of these:
 - Fusion init: baseline-safe
 - Missing dependencies: fail fast only when the hybrid path is selected
 - Vendored TTT source of truth: the copied files under `em_llm/attention/vendor_ttt_mag/`
+- Recurrent branch scope for first implementation: vendored `LinearSGD` only (defer full `TTT` wrapper until after baseline hybrid validation)
 - No recurrent-state-based retrieval steering in this step
 - No recurrent-state-based segmentation changes in this step

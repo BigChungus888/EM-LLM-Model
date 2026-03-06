@@ -472,7 +472,7 @@ def get_pred(
             time2 = time.time()
 
             pred = post_process(output["pred"], conv_type, dataset)
-            if model_type == "em-llm" and return_block_size:
+            if model_type in ["em-llm", "em-llm-ttt-mag"] and return_block_size:
                 block_sizes = [block.size for block in searcher.past_kv[0].global_blocks[0]]
                 mean_block_size = np.mean(np.array(block_sizes))
             else:

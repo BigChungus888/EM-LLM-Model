@@ -54,7 +54,7 @@ class GreedySearch:
         if not self.compute_ppl:
             labels = None
 
-        if self.model_type == "em-llm":
+        if self.model_type in ["em-llm", "em-llm-ttt-mag"]:
             out = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
