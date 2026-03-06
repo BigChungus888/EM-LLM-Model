@@ -2,6 +2,7 @@ import torch
 from torch.nn import CrossEntropyLoss
 
 from ..attention import RotaryEmbeddingESM, ATTN_FORWARD, CAUSAL_LM_FORWARD
+from ..attention.em_llm_ttt_mag import attach_hybrid_modules
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 
 from typing import List, Optional, Tuple, Union
@@ -278,6 +279,16 @@ def patch_hf(
         if isinstance(m, Attention):
             m._old_forward = m.forward
             m.forward = forward.__get__(m, Attention)
+
+            if attn_type == "em-llm-ttt-mag":
+                ttt_cfg = attn_kwargs.get("ttt_mag") or {}
+                attach_hybrid_modules(
+                    attn_module=m,
+                    hidden_size=model.config.hidden_size,
+                    num_heads=m.num_heads,
+                    head_dim=m.head_dim,
+                    ttt_cfg=ttt_cfg,
+                )
 
     model.apply(set_forward)
 
