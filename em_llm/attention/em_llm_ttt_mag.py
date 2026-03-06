@@ -32,6 +32,45 @@ def _project_qkv(query, key_value, project_q, project_k, project_v, dim_head, nu
     return h_q, h_k, h_v
 
 
+def _import_linear_sgd():
+    from .vendor_ttt_mag import LinearSGD
+
+    return LinearSGD
+
+
+def attach_hybrid_modules(attn_module, hidden_size, num_heads, head_dim, ttt_cfg):
+    ttt_cfg = ttt_cfg or {}
+
+    if not hasattr(attn_module, "_em_ttt_linear_sgd"):
+        try:
+            LinearSGD = _import_linear_sgd()
+        except Exception as exc:
+            raise RuntimeError(
+                "em-llm-ttt-mag requires vendored TTT dependencies; "
+                "failed to import em_llm.attention.vendor_ttt_mag.LinearSGD."
+            ) from exc
+
+        attn_module._em_ttt_linear_sgd = LinearSGD(
+            hidden_size=hidden_size,
+            num_heads=ttt_cfg.get("num_heads", num_heads),
+            head_dim=ttt_cfg.get("head_dim", head_dim),
+            expand_v=ttt_cfg.get("expand_v", 1),
+            chunk_size=ttt_cfg.get("chunk_size", 64),
+            base_lr=ttt_cfg.get("base_lr", 1.0),
+            norm_eps=ttt_cfg.get("norm_eps", 1e-5),
+            use_gate=ttt_cfg.get("use_gate", True),
+            mode=ttt_cfg.get("mode", "chunk"),
+            layer_idx=getattr(attn_module, "layer_idx", None),
+        )
+
+    if not hasattr(attn_module, "_em_ttt_mag_fusion"):
+        attn_module._em_ttt_mag_fusion = MAGFusion(
+            hidden_size=hidden_size,
+            norm_eps=ttt_cfg.get("norm_eps", 1e-5),
+            baseline_safe_init=ttt_cfg.get("baseline_safe_init", True),
+        )
+
+
 def em_llm_ttt_mag_attn_forward(
     model,
     n_local,
@@ -46,9 +85,9 @@ def em_llm_ttt_mag_attn_forward(
     perhead=False,
     n_mem: int = 2048,
     min_block_size: int = 1,
-    block_similarity_topk: int = False,
-    similarity_refinement_kwargs: dict = {},
-    contiguity_buffer_kwargs: dict = {},
+    block_similarity_topk: bool = False,
+    similarity_refinement_kwargs: dict | None = None,
+    contiguity_buffer_kwargs: dict | None = None,
     random_topk_blocks=False,
     infini_attention=False,
     uniform_blocks=False,
@@ -57,28 +96,8 @@ def em_llm_ttt_mag_attn_forward(
     **kwargs,
 ):
     ttt_cfg = ttt_mag or {}
-
-    def _build_recurrent_module(attn_module, hidden_size, num_heads, head_dim):
-        try:
-            from .vendor_ttt_mag import LinearSGD
-        except Exception as exc:
-            raise RuntimeError(
-                "em-llm-ttt-mag requires vendored TTT dependencies; "
-                "failed to import em_llm.attention.vendor_ttt_mag.LinearSGD."
-            ) from exc
-
-        return LinearSGD(
-            hidden_size=hidden_size,
-            num_heads=ttt_cfg.get("num_heads", num_heads),
-            head_dim=ttt_cfg.get("head_dim", head_dim),
-            expand_v=ttt_cfg.get("expand_v", 1),
-            chunk_size=ttt_cfg.get("chunk_size", 64),
-            base_lr=ttt_cfg.get("base_lr", 1.0),
-            norm_eps=ttt_cfg.get("norm_eps", 1e-5),
-            use_gate=ttt_cfg.get("use_gate", True),
-            mode=ttt_cfg.get("mode", "chunk"),
-            layer_idx=getattr(attn_module, "layer_idx", None),
-        )
+    similarity_refinement_kwargs = similarity_refinement_kwargs or {}
+    contiguity_buffer_kwargs = contiguity_buffer_kwargs or {}
 
     def forward(
         self,
@@ -142,15 +161,12 @@ def em_llm_ttt_mag_attn_forward(
         if not ttt_cfg.get("enabled", True):
             return episodic_out, None, layer_state
 
-        if not hasattr(self, "_em_ttt_linear_sgd"):
-            self._em_ttt_linear_sgd = _build_recurrent_module(
-                self,
-                hidden_size=query.shape[-1],
-                num_heads=num_heads,
-                head_dim=dim_head,
-            ).to(query.device)
+        if not hasattr(self, "_em_ttt_linear_sgd") or not hasattr(self, "_em_ttt_mag_fusion"):
+            raise RuntimeError(
+                "Hybrid modules are not attached. Ensure patch_hf() calls attach_hybrid_modules for em-llm-ttt-mag."
+            )
 
-        recurrent_module = self._em_ttt_linear_sgd
+        recurrent_module = self._em_ttt_linear_sgd.to(device=query.device, dtype=query.dtype)
 
         def qkv_fn(x):
             if project_k is not None:
@@ -168,14 +184,8 @@ def em_llm_ttt_mag_attn_forward(
         recurrent_module.set_qkv_callable(qkv_fn)
         ttt_out, recurrent_state = recurrent_module(query, past_key_values=layer_state.recurrent_state)
 
-        if not hasattr(self, "_em_ttt_mag_fusion"):
-            self._em_ttt_mag_fusion = MAGFusion(
-                hidden_size=query.shape[-1],
-                norm_eps=ttt_cfg.get("norm_eps", 1e-5),
-                baseline_safe_init=ttt_cfg.get("baseline_safe_init", True),
-            ).to(query.device)
-
-        fused_out = self._em_ttt_mag_fusion(episodic_out, ttt_out)
+        fusion_module = self._em_ttt_mag_fusion.to(device=query.device, dtype=query.dtype)
+        fused_out = fusion_module(episodic_out, ttt_out)
         layer_state.recurrent_state = recurrent_state
 
         return fused_out, None, layer_state
@@ -243,7 +253,8 @@ def em_llm_ttt_mag_causal_lm_forward(
     else:
         surprisal = None
 
-    torch.cuda.synchronize()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     surprisal_values = None
     first_state = past_key_values[0]
     first_pkv = first_state.episodic_state if isinstance(first_state, HybridLayerState) else first_state
@@ -276,9 +287,11 @@ def em_llm_ttt_mag_causal_lm_forward(
                 max_offset = 0
             st_layer = first_pkv.refine_from_layer
             assert len(past_key_values) >= st_layer + 1
+
             def _episodic(i):
                 s = past_key_values[i]
                 return s.episodic_state if isinstance(s, HybridLayerState) else s
+
             K = torch.clone(_episodic(st_layer).global_remainder[0][:, :, global_remainder_ed - exc_length - max_offset:global_remainder_ed, :]).unsqueeze(dim=1).to(torch.cuda.current_device())
             for l in range(st_layer + 1, len(past_key_values)):
                 K = torch.cat((K, torch.clone(_episodic(l).global_remainder[0][:, :, global_remainder_ed - exc_length - max_offset:global_remainder_ed, :]).unsqueeze(dim=1).to(torch.cuda.current_device())), dim=1)

@@ -7,6 +7,7 @@ from tqdm import tqdm
 import argparse
 from omegaconf import OmegaConf
 from em_llm.utils import patch_hf, GreedySearch
+from em_llm.attention.hybrid_state import HybridLayerState
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 import sys
@@ -473,7 +474,13 @@ def get_pred(
 
             pred = post_process(output["pred"], conv_type, dataset)
             if model_type in ["em-llm", "em-llm-ttt-mag"] and return_block_size:
-                block_sizes = [block.size for block in searcher.past_kv[0].global_blocks[0]]
+                first_layer_state = searcher.past_kv[0]
+                episodic_state = (
+                    first_layer_state.episodic_state
+                    if isinstance(first_layer_state, HybridLayerState)
+                    else first_layer_state
+                )
+                block_sizes = [block.size for block in episodic_state.global_blocks[0]]
                 mean_block_size = np.mean(np.array(block_sizes))
             else:
                 block_sizes = None

@@ -5,8 +5,9 @@ import torch.nn as nn
 class MAGFusion(nn.Module):
     """Fuse episodic and recurrent branches with MAG-style gating.
 
-    Contract:
-        fused = out_proj(norm_ep + sigmoid(gate_proj(norm_ep)) * norm_ttt)
+    Baseline-safe init means:
+        - gate ~= 0 at initialization
+        - fused output ~= episodic branch path at initialization
     """
 
     def __init__(self, hidden_size: int, norm_eps: float = 1e-5, baseline_safe_init: bool = True):
@@ -18,7 +19,8 @@ class MAGFusion(nn.Module):
 
         if baseline_safe_init:
             nn.init.zeros_(self.gate_proj.weight)
-            nn.init.zeros_(self.gate_proj.bias)
+            nn.init.constant_(self.gate_proj.bias, -20.0)
+            nn.init.eye_(self.out_proj.weight)
 
     def forward(self, episodic_out: torch.Tensor, ttt_out: torch.Tensor) -> torch.Tensor:
         norm_ep = self.ep_norm(episodic_out)
