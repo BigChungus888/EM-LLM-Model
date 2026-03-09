@@ -33,7 +33,7 @@ def _project_qkv(query, key_value, project_q, project_k, project_v, dim_head, nu
 
 
 def _import_linear_sgd():
-    from .vendor_ttt_mag import LinearSGD
+    from ..ttt_mag.linear_sgd import LinearSGD
 
     return LinearSGD
 
@@ -47,7 +47,7 @@ def attach_hybrid_modules(attn_module, hidden_size, num_heads, head_dim, ttt_cfg
         except Exception as exc:
             raise RuntimeError(
                 "em-llm-ttt-mag requires vendored TTT dependencies; "
-                "failed to import em_llm.attention.vendor_ttt_mag.LinearSGD."
+                "failed to import em_llm.ttt_mag.linear_sgd.LinearSGD."
             ) from exc
 
         attn_module._em_ttt_linear_sgd = LinearSGD(
