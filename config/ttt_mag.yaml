@@ -1,0 +1,49 @@
+verbose: false
+compute_ppl: true
+return_block_size: true
+logging: true
+em_splitter: surprisal  # surprisal, random, sentence
+
+max_len: 2147483647
+chunk_size: 512
+conv_type: llama-3-inst  # align this with tokenizer_path if you use chat templating
+
+extended_passkey: 1024
+
+model:
+  type: ttt-mag  # TitansMAG-native runtime; single-GPU only in v1.
+  path: /path/to/titans_mag_checkpoint
+  tokenizer_path: /path/to/tokenizer_or_base_model
+  # the checkpoint config is the source of truth for TitansMAG hidden size, heads,
+  # chunk size, local attention, and recurrent-memory parameters.
+  min_block_size: 8
+  max_block_size: 128
+  n_init: 128
+  n_local: 4096
+  n_mem: 4096
+  repr_topk: 4
+  max_cached_block: 520  # must be greater than n_mem/min_block_size
+  exc_block_size: 512
+  base: 500000
+  distance_scale: 1.0
+  surprisal_threshold_gamma: 1.0
+
+  min_free_cpu_memory: 100
+  disk_offload_threshold: 300000
+  vector_offload_threshold: 50000
+
+  similarity_refinement_kwargs:
+    similarity_refinement: false
+    refine_with_buffer: true
+    refine_from_layer: 20
+    similarity_metric: modularity
+
+  contiguity_buffer_kwargs:
+    use_contiguity_buffer: false
+    contiguity_buffer_size: 0.3
+
+  uniform_blocks: false
+  random_topk_blocks: false
+
+  titans_mag_runtime:
+    baseline_safe_init: true

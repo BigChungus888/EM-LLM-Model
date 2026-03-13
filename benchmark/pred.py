@@ -7,7 +7,8 @@ from tqdm import tqdm
 import argparse
 from omegaconf import OmegaConf
 from em_llm.utils import patch_hf, GreedySearch
-from em_llm.attention.hybrid_state import HybridLayerState
+from em_llm.attention.em_llm_ttt_mag import patch_titans_mag_model
+from em_llm.attention.hybrid_state import get_episodic_state
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from accelerate import init_empty_weights, load_checkpoint_and_dispatch
 import sys
@@ -56,10 +57,10 @@ def parse_args():
     conf.world_size = args.world_size
     conf.datetime = args.datetime
 
-    if torch.cuda.device_count() > 1:
-        conf.model.use_hf_acc = True
-    else:
+    if conf.model.type == "ttt-mag":
         conf.model.use_hf_acc = False
+    else:
+        conf.model.use_hf_acc = torch.cuda.device_count() > 1
     conf.model.allow_disk_offload = args.allow_disk_offload
     if args.allow_disk_offload:
         conf.model.world_size = args.world_size
@@ -78,10 +79,46 @@ def parse_args():
         print_dict(dict(conf))
     return conf
 
+
+def import_titans_mag_runtime():
+    try:
+        from em_llm.ttt_mag.modeling_titans_mag import TitansMAGForCausalLM
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to import the vendored TitansMAG runtime from `em_llm.ttt_mag`. "
+            "Install the required FLA/Titans dependencies before using `model.type: ttt-mag`."
+        ) from exc
+
+    return TitansMAGForCausalLM
+
+
+def load_titans_mag_model(model_config, llm_device_map="cuda"):
+    if torch.cuda.device_count() > 1:
+        raise ValueError(
+            "`model.type: ttt-mag` is single-GPU only in v1. "
+            "Set `num_gpus_per_job=1` or restrict `CUDA_VISIBLE_DEVICES` to one GPU."
+        )
+
+    TitansMAGForCausalLM = import_titans_mag_runtime()
+    model = TitansMAGForCausalLM.from_pretrained(
+        model_config.path,
+        torch_dtype="auto",
+        trust_remote_code=True,
+        device_map=llm_device_map,
+    )
+    return patch_titans_mag_model(model, **model_config)
+
 def get_model_and_tokenizer(model_config, llm_device_map="cuda", rank=0):
     tokenizer = AutoTokenizer.from_pretrained(model_config.tokenizer_path, trust_remote_code=True)
     attn_impl = model_config.get("attn_implementation", "sdpa")
     print(f"Using attention type: {attn_impl}")
+
+    if model_config.type == "ttt-mag":
+        model = load_titans_mag_model(model_config, llm_device_map=llm_device_map)
+        return model, tokenizer
+
+    if model_config.type != "em-llm":
+        raise ValueError(f"Unsupported model type: {model_config.type}")
 
     if model_config.use_hf_acc:
         print(f'Model split across {torch.cuda.device_count()} GPUs')
@@ -473,13 +510,9 @@ def get_pred(
             time2 = time.time()
 
             pred = post_process(output["pred"], conv_type, dataset)
-            if model_type in ["em-llm", "em-llm-ttt-mag"] and return_block_size:
+            if model_type in ["em-llm", "ttt-mag"] and return_block_size:
                 first_layer_state = searcher.past_kv[0]
-                episodic_state = (
-                    first_layer_state.episodic_state
-                    if isinstance(first_layer_state, HybridLayerState)
-                    else first_layer_state
-                )
+                episodic_state = get_episodic_state(first_layer_state)
                 block_sizes = [block.size for block in episodic_state.global_blocks[0]]
                 mean_block_size = np.mean(np.array(block_sizes))
             else:
@@ -617,5 +650,3 @@ if __name__ == '__main__':
 
     main(args)
     
-
-

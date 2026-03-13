@@ -280,7 +280,7 @@ def patch_hf(
             m._old_forward = m.forward
             m.forward = forward.__get__(m, Attention)
 
-            if attn_type == "em-llm-ttt-mag":
+            if attn_type == "ttt-mag":
                 ttt_cfg = attn_kwargs.get("ttt_mag") or {}
                 attach_hybrid_modules(
                     attn_module=m,
@@ -302,4 +302,3 @@ def patch_hf(
         model.forward = causal_lm_forward.__get__(model, model.__class__)
 
     return model
-

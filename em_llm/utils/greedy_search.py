@@ -3,6 +3,12 @@ import torch
 import gc
 import time
 
+from ..attention.hybrid_state import get_episodic_state
+
+
+def _get_episodic_state(layer_state):
+    return get_episodic_state(layer_state)
+
 
 class GreedySearch:
     def __init__(self, model, tokenizer, model_type, em_splitter=None
@@ -54,7 +60,7 @@ class GreedySearch:
         if not self.compute_ppl:
             labels = None
 
-        if self.model_type in ["em-llm", "em-llm-ttt-mag"]:
+        if self.model_type in ["em-llm", "ttt-mag"]:
             out = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -112,14 +118,19 @@ class GreedySearch:
                     if em_input is not None:
                         assert em_input.shape == input_ids[:, st: ed].shape, f"Shape mismatch in em_labels and input_ids"
                     
-                    if past_key_values is not None: 
-                        if past_key_values[0].allow_disk_offload is None and input_ids.size(1) > kwargs["disk_offload_threshold"]:
+                    if past_key_values is not None:
+                        first_state = _get_episodic_state(past_key_values[0])
+                        if first_state.allow_disk_offload is None and input_ids.size(1) > kwargs["disk_offload_threshold"]:
                             print(f"Inputs have length {input_ids.size(1)}: allowing disk offload for past_key_values.")
                             for pkv in past_key_values:
-                                pkv.allow_disk_offload = True
-                        elif past_key_values[0].vector_offload and input_ids.size(1) > kwargs["vector_offload_threshold"] and past_key_values[0].block_repr_k[0].data.device != torch.device('cpu'):
+                                _get_episodic_state(pkv).allow_disk_offload = True
+                        elif (
+                            first_state.vector_offload
+                            and input_ids.size(1) > kwargs["vector_offload_threshold"]
+                            and first_state.block_repr_k[0].data.device != torch.device('cpu')
+                        ):
                             for pkv in past_key_values:
-                                pkv._offload_vector()
+                                _get_episodic_state(pkv)._offload_vector()
 
                     out = self._model_pass(
                         input_ids=input_ids[:, st: ed],

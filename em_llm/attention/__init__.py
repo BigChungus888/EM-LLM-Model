@@ -5,12 +5,12 @@ from .em_llm_ttt_mag import em_llm_ttt_mag_attn_forward, em_llm_ttt_mag_causal_l
 
 ATTN_FORWARD = {
     "em-llm": em_llm_attn_forward,
-    "em-llm-ttt-mag": em_llm_ttt_mag_attn_forward,
+    "ttt-mag": em_llm_ttt_mag_attn_forward,
 }
 
 CAUSAL_LM_FORWARD = {
     "em-llm": em_llm_causal_lm_forward,
-    "em-llm-ttt-mag": em_llm_ttt_mag_causal_lm_forward,
+    "ttt-mag": em_llm_ttt_mag_causal_lm_forward,
 }
 
 __all__ = ["RotaryEmbeddingESM", "ATTN_FORWARD"]

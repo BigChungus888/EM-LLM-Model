@@ -18,10 +18,11 @@ class RotaryEmbeddingESM(torch.nn.Module):
         super().__init__()
         self.base = base
         self.distance_scale = distance_scale
+        init_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Generate and save the inverse frequency buffer (non trainable)
         inv_freq = 1.0 / (
-            ext_factors.to(torch.device("cuda")) * base ** (torch.arange(0, dim, 2, device="cuda", dtype=torch.float32) / dim)
+            ext_factors.to(init_device) * base ** (torch.arange(0, dim, 2, device=init_device, dtype=torch.float32) / dim)
         )
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 

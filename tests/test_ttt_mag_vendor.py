@@ -18,11 +18,15 @@ def install_fla_stubs():
     models_module = types.ModuleType("fla.models")
     models_utils_module = types.ModuleType("fla.models.utils")
     modules_module = types.ModuleType("fla.modules")
+    l2warp_module = types.ModuleType("fla.modules.l2warp")
+    utils_module = types.ModuleType("fla.utils")
     layers_module = types.ModuleType("fla.layers")
     attn_module = types.ModuleType("fla.layers.attn")
 
     class Cache(list):
-        pass
+        @classmethod
+        def from_legacy_cache(cls, cache):
+            return cls(cache or [])
 
     class RMSNorm(nn.Module):
         def __init__(self, hidden_size, eps=1e-5):
@@ -61,23 +65,58 @@ def install_fla_stubs():
         def forward(self, x, attn_mask=None):
             return (x,)
 
+    class FusedCrossEntropyLoss(nn.CrossEntropyLoss):
+        def __init__(self, inplace_backward=True):
+            super().__init__()
+
+    class FusedLinearCrossEntropyLoss(nn.CrossEntropyLoss):
+        def __init__(self, use_l2warp=False):
+            super().__init__()
+
+    class GatedMLP(nn.Module):
+        def __init__(self, hidden_size, hidden_ratio, intermediate_size, hidden_act, fuse_swiglu):
+            super().__init__()
+            inner_size = intermediate_size or hidden_size * hidden_ratio
+            self.up_proj = nn.Linear(hidden_size, inner_size, bias=False)
+            self.down_proj = nn.Linear(inner_size, hidden_size, bias=False)
+
+        def forward(self, x, **kwargs):
+            return self.down_proj(torch.nn.functional.silu(self.up_proj(x)))
+
+    def l2_warp(loss, logits):
+        return loss
+
+    def identity_decorator(*args, **kwargs):
+        def decorator(fn):
+            return fn
+        return decorator
+
     models_utils_module.Cache = Cache
     modules_module.RMSNorm = RMSNorm
     modules_module.FusedRMSNormGated = FusedRMSNormGated
     modules_module.ShortConvolution = ShortConvolution
+    modules_module.FusedCrossEntropyLoss = FusedCrossEntropyLoss
+    modules_module.FusedLinearCrossEntropyLoss = FusedLinearCrossEntropyLoss
+    modules_module.GatedMLP = GatedMLP
     attn_module.Attention = Attention
+    l2warp_module.l2_warp = l2_warp
+    utils_module.input_guard = identity_decorator
+    utils_module.autocast_custom_bwd = identity_decorator
+    utils_module.autocast_custom_fwd = identity_decorator
 
     sys.modules["fla"] = fla_module
     sys.modules["fla.models"] = models_module
     sys.modules["fla.models.utils"] = models_utils_module
     sys.modules["fla.modules"] = modules_module
+    sys.modules["fla.modules.l2warp"] = l2warp_module
+    sys.modules["fla.utils"] = utils_module
     sys.modules["fla.layers"] = layers_module
     sys.modules["fla.layers.attn"] = attn_module
 
 
 def load_vendor_submodule(name: str):
     package_name = "_vendor_ttt_mag_testpkg"
-    root = Path(__file__).resolve().parents[1] / "em_llm" / "attention" / "vendor_ttt_mag"
+    root = Path(__file__).resolve().parents[1] / "em_llm" / "ttt_mag"
 
     if package_name not in sys.modules:
         # load the vendored package by file path so the test can target the new
@@ -172,6 +211,40 @@ class VendoredLinearSGDTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(chunk_out, naive_out, atol=1e-5))
         self.assertTrue(torch.allclose(chunk_state, naive_state, atol=1e-5))
+
+
+class VendoredTitansMAGModelTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        disable_torch_compile()
+        install_fla_stubs()
+        cls.config_module = load_vendor_submodule("configuration_titans_mag")
+        cls.modeling_module = load_vendor_submodule("modeling_titans_mag")
+
+    def test_vendored_titans_mag_model_imports_and_instantiates(self):
+        config = self.config_module.TitansMAGConfig(
+            hidden_size=16,
+            num_heads=4,
+            head_dim=4,
+            expand_v=1,
+            chunk_size=4,
+            conv_size=2,
+            diff_projections=False,
+            use_attention=False,
+            num_hidden_layers=1,
+            vocab_size=32,
+            fuse_norm=False,
+            fuse_swiglu=False,
+            fuse_cross_entropy=False,
+            memory_model="linear",
+            memory_model_config={"norm_eps": 1e-5, "base_lr": 1.0, "use_gate": False},
+        )
+
+        model = self.modeling_module.TitansMAGForCausalLM(config)
+        out = model(input_ids=torch.tensor([[1, 2, 3]]), use_cache=True, return_dict=True)
+
+        self.assertEqual(out.logits.shape, (1, 3, 32))
+        self.assertEqual(len(out.past_key_values), 1)
 
 
 if __name__ == "__main__":

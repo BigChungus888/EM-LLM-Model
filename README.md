@@ -64,8 +64,9 @@ conv_type: mistral-inst  # conversation template type
 extended_passkey: 1024  # length to extend infinite-bench's passkey task to in terms of thousands of tokens (k)
 
 model:
-  type: em-llm  # Which model to use for inference (only em-llm is made available in this version)
-  path: mistralai/Mistral-7B-Instruct-v0.2  # HuggingFace model path
+  type: em-llm  # `em-llm` uses the HF patch path, `ttt-mag` loads a native TitansMAG checkpoint
+  path: mistralai/Mistral-7B-Instruct-v0.2  # HF path for `em-llm`, TitansMAG checkpoint path for `ttt-mag`
+  tokenizer_path: mistralai/Mistral-7B-Instruct-v0.2  # optional for `em-llm`, useful when a TitansMAG checkpoint does not bundle a tokenizer
   min_block_size: 8  # the smallest possible block size - blocks smaller than this will be expanded to this size
   max_block_size: 128  # the biggest possible block size - blocks bigger than this will be split to this size
   n_init: 128  # number of initial tokens to include in context window
@@ -96,6 +97,8 @@ model:
   random_topk_blocks: false  # retrieve random blocks rather than the topk most similar blocks
 ```
 
+`model.type: ttt-mag` now loads `TitansMAGForCausalLM` directly instead of patching a HuggingFace decoder layer. In v1 this path is single-GPU only, and the Titans checkpoint config remains the source of truth for TitansMAG architecture settings.
+
 ### Evaluation
 
 **Data Preparation**
@@ -109,7 +112,7 @@ You can evaluate EM-LLM by running the following command. You can also optionall
 ```
 bash scripts/run.sh
 
-    -m|--model  # DEFAULT: mistral; OPTIONS: mistral,llama3,llama31,phi3_mini,phi35_mini - Which base LLM to use during evaluation.
+    -m|--model  # DEFAULT: mistral; OPTIONS: mistral,llama3,llama31,phi3_mini,phi35_mini,ttt_mag - Which config to use during evaluation.
     -b|--benchmark  # DEFAULT: long-bench; OPTIONS: long-bench,infinite-bench,passkey - Which benchmark to evaluate. Passkey evaluates an extended version of InfiniteBench's passkey retrieval task (see yaml for context length parameter). 
     -w|--world-size  # DEFAULT: number of visible GPUs - Total number of GPUs to be used during evaluation. 
     -n|--num_gpus_per_job  # DEFAULT: 1 - How many GPUs to attribute to each job. If >1, model layers will be evenly spread over multiple GPUs. 
